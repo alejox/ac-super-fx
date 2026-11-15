@@ -1,0 +1,88 @@
+// AC Super FX - Blur separable (una pasada horizontal + una vertical).
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 texel_step; // (1/ancho, 0) o (0, 1/alto)
+uniform float radius;      // radio en pixeles
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+// Gaussiano. Cada muestra bilineal cubre dos pixeles vecinos (i, i+1),
+// asi que el costo es la mitad de un gaussiano ingenuo.
+float4 PSGaussian(VertData v_in) : TARGET
+{
+	float sigma = max(radius * 0.5, 0.0001);
+	float inv   = 1.0 / (2.0 * sigma * sigma);
+
+	float4 sum  = image.Sample(linearClamp, v_in.uv);
+	float total = 1.0;
+
+	for (int t = 0; t < 48; t++) {
+		float x1 = float(t) * 2.0 + 1.0;
+		if (x1 > radius)
+			break;
+		float x2 = x1 + 1.0;
+		float w1 = exp(-(x1 * x1) * inv);
+		float w2 = exp(-(x2 * x2) * inv);
+		float w  = w1 + w2;
+		float2 off = texel_step * ((x1 * w1 + x2 * w2) / w);
+
+		sum += image.Sample(linearClamp, v_in.uv + off) * w;
+		sum += image.Sample(linearClamp, v_in.uv - off) * w;
+		total += 2.0 * w;
+	}
+	return sum / total;
+}
+
+// Box: todos los pixeles pesan igual. Mas barato y mas "duro".
+float4 PSBox(VertData v_in) : TARGET
+{
+	float4 sum  = image.Sample(linearClamp, v_in.uv);
+	float total = 1.0;
+
+	for (int t = 0; t < 48; t++) {
+		float x1 = float(t) * 2.0 + 1.0;
+		if (x1 > radius)
+			break;
+		float2 off = texel_step * (x1 + 0.5);
+
+		sum += image.Sample(linearClamp, v_in.uv + off) * 2.0;
+		sum += image.Sample(linearClamp, v_in.uv - off) * 2.0;
+		total += 4.0;
+	}
+	return sum / total;
+}
+
+technique Gaussian
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSGaussian(v_in);
+	}
+}
+
+technique Box
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBox(v_in);
+	}
+}
