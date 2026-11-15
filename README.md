@@ -5,6 +5,11 @@ Pack de efectos para OBS Studio, por alejoxcode.
 ## Efectos
 
 - **AC Super FX Blur** (filtro): preajustes (Suave, Medio, Fuerte, Censura), intensidad de 0 a 96 px, estilo Suave o Rápido, y modo rectángulo para desenfocar solo una zona (o todo menos esa zona) con borde suave.
+- **AC Super FX Fondo animado** (fuente): humo o gradiente animado generado por shader. Colores fijos, tomados de otra fuente de OBS, o de la canción que suena con Music Now Playing.
+
+### Integración con Music Now Playing
+
+AC Super FX consulta el procedimiento global de OBS `music_now_playing_get_palette`, que devuelve `playing` (bool) y `accent`, `tint`, `background` (enteros `0xRRGGBB`). Si el procedimiento no existe o no suena nada, usa los colores fijos.
 
 ## Compilar en macOS
 
