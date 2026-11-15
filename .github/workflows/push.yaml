@@ -27,7 +27,7 @@ jobs:
 
   create-release:
     name: Create Release 🛫
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || startsWith(github.ref_name, 'release/')
     runs-on: ubuntu-24.04
     needs: build-project
     defaults:
@@ -41,16 +41,19 @@ jobs:
           if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
           shopt -s extglob
 
-          case "${GITHUB_REF_NAME}" in
+          # Acepta un tag X.Y.Z o una rama release/X.Y.Z
+          version="${GITHUB_REF_NAME#release/}"
+
+          case "${version}" in
             +([0-9]).+([0-9]).+([0-9]) )
               echo 'validTag=true' >> $GITHUB_OUTPUT
               echo 'prerelease=false' >> $GITHUB_OUTPUT
-              echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+              echo "version=${version}" >> $GITHUB_OUTPUT
               ;;
             +([0-9]).+([0-9]).+([0-9])-@(beta|rc)*([0-9]) )
               echo 'validTag=true' >> $GITHUB_OUTPUT
               echo 'prerelease=true' >> $GITHUB_OUTPUT
-              echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+              echo "version=${version}" >> $GITHUB_OUTPUT
               ;;
             *) echo 'validTag=false' >> $GITHUB_OUTPUT ;;
           esac
@@ -105,7 +108,8 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564
         with:
-          draft: true
+          draft: false
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ fromJSON(steps.check.outputs.prerelease) }}
           tag_name: ${{ steps.check.outputs.version }}
           name: ${{ needs.build-project.outputs.pluginName }} ${{ steps.check.outputs.version }}
