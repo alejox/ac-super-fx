@@ -4,7 +4,7 @@ Pack de efectos para OBS Studio, por alejoxcode.
 
 ## Efectos
 
-- **AC Super FX Blur** (filtro): desenfoque Gaussiano o Box, radio de 0 a 96 px.
+- **AC Super FX Blur** (filtro): preajustes (Suave, Medio, Fuerte, Censura), intensidad de 0 a 96 px, estilo Suave o Rápido, y modo rectángulo para desenfocar solo una zona (o todo menos esa zona) con borde suave.
 
 ## Compilar en macOS
 
@@ -26,6 +26,10 @@ cp -R build_macos/RelWithDebInfo/ac-super-fx.plugin ~/Library/Application\ Suppo
 ```
 
 Reinicia OBS → clic derecho en una fuente → Filtros → "+" → **AC Super FX Blur**.
+
+## Publicar una versión
+
+Sube la versión en `buildspec.json` y empuja una rama `release/X.Y.Z`; GitHub Actions compila y publica la release.
 
 ## Estructura
 

@@ -69,6 +69,31 @@ float4 PSBox(VertData v_in) : TARGET
 	return sum / total;
 }
 
+// Mezcla el original con el desenfocado solo dentro de una region.
+uniform texture2d original;
+uniform float4 region;     // x = izquierda, y = arriba, z = derecha, w = abajo (UV)
+uniform float2 feather_uv; // borde suave, en UV
+uniform float invert;      // 1.0 = desenfocar fuera de la region
+
+float4 PSRegion(VertData v_in) : TARGET
+{
+	float4 blurred = image.Sample(linearClamp, v_in.uv);
+	float4 sharp   = original.Sample(linearClamp, v_in.uv);
+
+	float fx = max(feather_uv.x, 0.00001);
+	float fy = max(feather_uv.y, 0.00001);
+
+	float mx = smoothstep(region.x - fx, region.x + fx, v_in.uv.x) *
+	           (1.0 - smoothstep(region.z - fx, region.z + fx, v_in.uv.x));
+	float my = smoothstep(region.y - fy, region.y + fy, v_in.uv.y) *
+	           (1.0 - smoothstep(region.w - fy, region.w + fy, v_in.uv.y));
+
+	float m = mx * my;
+	m = m + (1.0 - 2.0 * m) * invert;
+
+	return sharp + (blurred - sharp) * m;
+}
+
 technique Gaussian
 {
 	pass
@@ -84,5 +109,14 @@ technique Box
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSBox(v_in);
+	}
+}
+
+technique Region
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRegion(v_in);
 	}
 }

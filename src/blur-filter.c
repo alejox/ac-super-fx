@@ -19,13 +19,33 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <obs-module.h>
 #include <plugin-support.h>
 
+#define S_PRESET "preset"
 #define S_TYPE "type"
 #define S_RADIUS "radius"
+#define S_AREA "area"
+#define S_REGION "region_group"
+#define S_REGION_X "region_x"
+#define S_REGION_Y "region_y"
+#define S_REGION_W "region_width"
+#define S_REGION_H "region_height"
+#define S_FEATHER "region_feather"
+#define S_INVERT "region_invert"
 
 #define TYPE_GAUSSIAN 0
 #define TYPE_BOX 1
 
-#define MAX_RADIUS 96.0
+#define AREA_FULL 0
+#define AREA_REGION 1
+
+#define PRESET_CUSTOM 0
+#define PRESET_SOFT 1
+#define PRESET_MEDIUM 2
+#define PRESET_STRONG 3
+#define PRESET_CENSOR 4
+
+#define MAX_RADIUS 96
+
+static const int preset_radius[] = {0, 8, 20, 40, 64};
 
 struct blur_filter {
 	obs_source_t *context;
@@ -34,6 +54,10 @@ struct blur_filter {
 	gs_eparam_t *param_image;
 	gs_eparam_t *param_texel_step;
 	gs_eparam_t *param_radius;
+	gs_eparam_t *param_original;
+	gs_eparam_t *param_region;
+	gs_eparam_t *param_feather;
+	gs_eparam_t *param_invert;
 
 	gs_texrender_t *input;  /* fuente original */
 	gs_texrender_t *pass_h; /* tras la pasada horizontal */
@@ -41,6 +65,15 @@ struct blur_filter {
 
 	int type;
 	float radius;
+
+	bool use_region;
+	float region_x; /* 0..1 */
+	float region_y;
+	float region_w;
+	float region_h;
+	float feather; /* pixeles */
+	bool invert;
+
 	bool rendering;
 };
 
@@ -55,7 +88,15 @@ static void blur_update(void *data, obs_data_t *settings)
 	struct blur_filter *f = data;
 
 	f->type = (int)obs_data_get_int(settings, S_TYPE);
-	f->radius = (float)obs_data_get_double(settings, S_RADIUS);
+	f->radius = (float)obs_data_get_int(settings, S_RADIUS);
+
+	f->use_region = obs_data_get_int(settings, S_AREA) == AREA_REGION;
+	f->region_x = (float)obs_data_get_double(settings, S_REGION_X) / 100.0f;
+	f->region_y = (float)obs_data_get_double(settings, S_REGION_Y) / 100.0f;
+	f->region_w = (float)obs_data_get_double(settings, S_REGION_W) / 100.0f;
+	f->region_h = (float)obs_data_get_double(settings, S_REGION_H) / 100.0f;
+	f->feather = (float)obs_data_get_int(settings, S_FEATHER);
+	f->invert = obs_data_get_bool(settings, S_INVERT);
 }
 
 static void *blur_create(obs_data_t *settings, obs_source_t *context)
@@ -72,6 +113,10 @@ static void *blur_create(obs_data_t *settings, obs_source_t *context)
 		f->param_image = gs_effect_get_param_by_name(f->effect, "image");
 		f->param_texel_step = gs_effect_get_param_by_name(f->effect, "texel_step");
 		f->param_radius = gs_effect_get_param_by_name(f->effect, "radius");
+		f->param_original = gs_effect_get_param_by_name(f->effect, "original");
+		f->param_region = gs_effect_get_param_by_name(f->effect, "region");
+		f->param_feather = gs_effect_get_param_by_name(f->effect, "feather_uv");
+		f->param_invert = gs_effect_get_param_by_name(f->effect, "invert");
 	}
 	f->input = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	f->pass_h = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
@@ -161,6 +206,45 @@ static bool blur_pass(struct blur_filter *f, gs_texture_t *src, gs_texrender_t *
 	return true;
 }
 
+/* Dibuja el resultado final en el destino actual de OBS. */
+static void draw_result(struct blur_filter *f, bool blurred, uint32_t width, uint32_t height)
+{
+	gs_texture_t *sharp = gs_texrender_get_texture(f->input);
+	gs_texture_t *result = blurred ? gs_texrender_get_texture(f->pass_v) : sharp;
+	if (!result)
+		return;
+
+	/* Las texturas llevan alfa premultiplicado. */
+	gs_blend_state_push();
+	gs_enable_blending(true);
+	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+
+	if (blurred && f->use_region && sharp) {
+		struct vec4 region;
+		struct vec2 feather;
+		vec4_set(&region, f->region_x, f->region_y, f->region_x + f->region_w, f->region_y + f->region_h);
+		vec2_set(&feather, f->feather / (float)width, f->feather / (float)height);
+
+		gs_effect_set_texture(f->param_image, result);
+		gs_effect_set_texture(f->param_original, sharp);
+		gs_effect_set_vec4(f->param_region, &region);
+		gs_effect_set_vec2(f->param_feather, &feather);
+		gs_effect_set_float(f->param_invert, f->invert ? 1.0f : 0.0f);
+
+		while (gs_effect_loop(f->effect, "Region"))
+			gs_draw_sprite(result, 0, width, height);
+	} else {
+		gs_effect_t *draw = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+		gs_eparam_t *image = gs_effect_get_param_by_name(draw, "image");
+		gs_effect_set_texture(image, result);
+
+		while (gs_effect_loop(draw, "Draw"))
+			gs_draw_sprite(result, 0, width, height);
+	}
+
+	gs_blend_state_pop();
+}
+
 static void blur_render(void *data, gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
@@ -170,7 +254,7 @@ static void blur_render(void *data, gs_effect_t *effect)
 	uint32_t width = target ? obs_source_get_base_width(target) : 0;
 	uint32_t height = target ? obs_source_get_base_height(target) : 0;
 
-	if (!f->effect || !width || !height || f->radius < 0.01f || f->rendering) {
+	if (!f->effect || !width || !height || f->radius < 1.0f || f->rendering) {
 		obs_source_skip_video_filter(f->context);
 		return;
 	}
@@ -194,24 +278,60 @@ static void blur_render(void *data, gs_effect_t *effect)
 	gs_blend_state_pop();
 
 	/* Si algo fallo, se muestra la fuente sin desenfocar. */
-	gs_texture_t *result = gs_texrender_get_texture(ok ? f->pass_v : f->input);
-	if (result) {
-		gs_effect_t *draw = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-		gs_eparam_t *image = gs_effect_get_param_by_name(draw, "image");
-		gs_effect_set_texture(image, result);
-
-		/* Las texturas llevan alfa premultiplicado. */
-		gs_blend_state_push();
-		gs_enable_blending(true);
-		gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
-
-		while (gs_effect_loop(draw, "Draw"))
-			gs_draw_sprite(result, 0, width, height);
-
-		gs_blend_state_pop();
-	}
+	draw_result(f, ok, width, height);
 
 	f->rendering = false;
+}
+
+/* Elegir un preajuste mueve la intensidad. */
+static bool preset_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(property);
+
+	long long preset = obs_data_get_int(settings, S_PRESET);
+	if (preset <= PRESET_CUSTOM || preset > PRESET_CENSOR)
+		return false;
+
+	if (obs_data_get_int(settings, S_RADIUS) == preset_radius[preset])
+		return false;
+
+	obs_data_set_int(settings, S_RADIUS, preset_radius[preset]);
+	return true;
+}
+
+/* Mover la intensidad a mano pasa el preajuste a "Personalizado". */
+static bool radius_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(property);
+
+	long long preset = obs_data_get_int(settings, S_PRESET);
+	if (preset <= PRESET_CUSTOM || preset > PRESET_CENSOR)
+		return false;
+
+	if (obs_data_get_int(settings, S_RADIUS) == preset_radius[preset])
+		return false;
+
+	obs_data_set_int(settings, S_PRESET, PRESET_CUSTOM);
+	return true;
+}
+
+/* Los controles del rectangulo solo aparecen cuando se usan. */
+static bool area_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(property);
+
+	bool region = obs_data_get_int(settings, S_AREA) == AREA_REGION;
+	obs_property_set_visible(obs_properties_get(props, S_REGION), region);
+	return true;
+}
+
+static obs_property_t *add_percent(obs_properties_t *props, const char *name, const char *text)
+{
+	obs_property_t *p = obs_properties_add_float_slider(props, name, obs_module_text(text), 0.0, 100.0, 0.5);
+	obs_property_float_set_suffix(p, " %");
+	return p;
 }
 
 static obs_properties_t *blur_properties(void *data)
@@ -219,22 +339,62 @@ static obs_properties_t *blur_properties(void *data)
 	UNUSED_PARAMETER(data);
 	obs_properties_t *props = obs_properties_create();
 
+	obs_property_t *preset = obs_properties_add_list(props, S_PRESET, obs_module_text("ACFX.Blur.Preset"),
+							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(preset, obs_module_text("ACFX.Blur.Preset.Soft"), PRESET_SOFT);
+	obs_property_list_add_int(preset, obs_module_text("ACFX.Blur.Preset.Medium"), PRESET_MEDIUM);
+	obs_property_list_add_int(preset, obs_module_text("ACFX.Blur.Preset.Strong"), PRESET_STRONG);
+	obs_property_list_add_int(preset, obs_module_text("ACFX.Blur.Preset.Censor"), PRESET_CENSOR);
+	obs_property_list_add_int(preset, obs_module_text("ACFX.Blur.Preset.Custom"), PRESET_CUSTOM);
+	obs_property_set_long_description(preset, obs_module_text("ACFX.Blur.Preset.Tip"));
+	obs_property_set_modified_callback(preset, preset_modified);
+
+	obs_property_t *radius =
+		obs_properties_add_int_slider(props, S_RADIUS, obs_module_text("ACFX.Blur.Radius"), 0, MAX_RADIUS, 1);
+	obs_property_int_set_suffix(radius, " px");
+	obs_property_set_long_description(radius, obs_module_text("ACFX.Blur.Radius.Tip"));
+	obs_property_set_modified_callback(radius, radius_modified);
+
 	obs_property_t *type = obs_properties_add_list(props, S_TYPE, obs_module_text("ACFX.Blur.Type"),
 						       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(type, obs_module_text("ACFX.Blur.Type.Gaussian"), TYPE_GAUSSIAN);
 	obs_property_list_add_int(type, obs_module_text("ACFX.Blur.Type.Box"), TYPE_BOX);
+	obs_property_set_long_description(type, obs_module_text("ACFX.Blur.Type.Tip"));
 
-	obs_property_t *radius = obs_properties_add_float_slider(props, S_RADIUS, obs_module_text("ACFX.Blur.Radius"),
-								 0.0, MAX_RADIUS, 0.5);
-	obs_property_float_set_suffix(radius, " px");
+	obs_property_t *area = obs_properties_add_list(props, S_AREA, obs_module_text("ACFX.Blur.Area"),
+						       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(area, obs_module_text("ACFX.Blur.Area.Full"), AREA_FULL);
+	obs_property_list_add_int(area, obs_module_text("ACFX.Blur.Area.Region"), AREA_REGION);
+	obs_property_set_long_description(area, obs_module_text("ACFX.Blur.Area.Tip"));
+	obs_property_set_modified_callback(area, area_modified);
+
+	obs_properties_t *region = obs_properties_create();
+	add_percent(region, S_REGION_X, "ACFX.Blur.Region.X");
+	add_percent(region, S_REGION_Y, "ACFX.Blur.Region.Y");
+	add_percent(region, S_REGION_W, "ACFX.Blur.Region.Width");
+	add_percent(region, S_REGION_H, "ACFX.Blur.Region.Height");
+	obs_property_t *feather = obs_properties_add_int_slider(region, S_FEATHER,
+								obs_module_text("ACFX.Blur.Region.Feather"), 0, 200, 1);
+	obs_property_int_set_suffix(feather, " px");
+	obs_properties_add_bool(region, S_INVERT, obs_module_text("ACFX.Blur.Region.Invert"));
+
+	obs_properties_add_group(props, S_REGION, obs_module_text("ACFX.Blur.Region"), OBS_GROUP_NORMAL, region);
 
 	return props;
 }
 
 static void blur_defaults(obs_data_t *settings)
 {
+	obs_data_set_default_int(settings, S_PRESET, PRESET_MEDIUM);
+	obs_data_set_default_int(settings, S_RADIUS, 20);
 	obs_data_set_default_int(settings, S_TYPE, TYPE_GAUSSIAN);
-	obs_data_set_default_double(settings, S_RADIUS, 12.0);
+	obs_data_set_default_int(settings, S_AREA, AREA_FULL);
+	obs_data_set_default_double(settings, S_REGION_X, 25.0);
+	obs_data_set_default_double(settings, S_REGION_Y, 25.0);
+	obs_data_set_default_double(settings, S_REGION_W, 50.0);
+	obs_data_set_default_double(settings, S_REGION_H, 50.0);
+	obs_data_set_default_int(settings, S_FEATHER, 0);
+	obs_data_set_default_bool(settings, S_INVERT, false);
 }
 
 struct obs_source_info ac_super_fx_blur_filter = {
