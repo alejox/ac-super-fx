@@ -89,6 +89,125 @@ float4 PSGradient(VertData v_in) : TARGET
 	return float4(col * al, al);
 }
 
+// Compone un color sobre el fondo segun la densidad del efecto.
+float4 compose(float3 col, float dens)
+{
+	float a = opacity * lerp(1.0, dens, transparent);
+	return float4(col * a, a);
+}
+
+float4 PSAurora(VertData v_in) : TARGET
+{
+	float2 p = float2(v_in.uv.x * aspect, v_in.uv.y) * scale;
+	float t  = time;
+
+	float sway    = fbm(float2(p.x * 0.8 + t * 0.05, t * 0.07));
+	float curtain = fbm(float2(p.x * 2.0 + t * 0.10, p.y * 0.3 - t * 0.05));
+	float d       = (v_in.uv.y + (sway - 0.5) * 0.6 - 0.45) * 3.2;
+	float glow    = exp(-d * d);
+	float dens    = clamp(glow * (0.35 + curtain * 1.2), 0.0, 1.0);
+
+	float3 band = lerp(color1.rgb, color2.rgb, clamp(v_in.uv.y * 1.2 + (sway - 0.5), 0.0, 1.0));
+	return compose(lerp(color3.rgb, band, dens), dens);
+}
+
+float4 PSPlasma(VertData v_in) : TARGET
+{
+	float2 p = float2(v_in.uv.x * aspect, v_in.uv.y) * scale;
+	float t  = time;
+
+	float v = sin(p.x * 1.5 + t * 0.40) + sin(p.y * 1.8 - t * 0.30) + sin((p.x + p.y) * 1.2 + t * 0.25) +
+	          sin(length(p - float2(aspect, 1.0) * scale * 0.5) * 2.0 - t * 0.50);
+	v = v * 0.25;
+
+	float a = 0.5 + 0.5 * sin(v * 4.712);
+	float b = 0.5 + 0.5 * cos(v * 4.712 + 1.0);
+
+	float3 col = lerp(color3.rgb, color1.rgb, a);
+	col = lerp(col, color2.rgb, b * 0.6);
+	return compose(col, a);
+}
+
+// Luces desenfocadas que flotan en tres capas.
+float4 PSBokeh(VertData v_in) : TARGET
+{
+	float2 base = float2(v_in.uv.x * aspect, v_in.uv.y);
+	float t     = time;
+
+	float3 acc  = float3(0.0, 0.0, 0.0);
+	float total = 0.0;
+
+	for (int i = 0; i < 3; i++) {
+		float fi   = float(i);
+		float2 g   = base * scale * (1.0 + fi * 0.7) + float2(t * 0.03 * (fi + 1.0), -t * 0.05 * (fi + 1.0));
+		float2 id  = floor(g) + float2(fi * 17.0, fi * 5.0);
+		float2 f   = frac(g) - float2(0.5, 0.5);
+		float rnd  = hash21(id);
+		float2 off = float2(hash21(id + float2(3.1, 0.0)) - 0.5, hash21(id + float2(0.0, 7.7)) - 0.5) * 0.3;
+		float rad  = 0.12 + rnd * 0.18;
+		float d    = length(f - off);
+
+		float disc = (1.0 - smoothstep(rad * 0.6, rad, d)) * (0.25 + 0.5 * rnd) *
+		             (0.6 + 0.4 * sin(t * (0.5 + rnd) + rnd * 6.283));
+		acc   += lerp(color1.rgb, color2.rgb, rnd) * disc;
+		total += disc;
+	}
+
+	float dens = clamp(total, 0.0, 1.0);
+	return compose(lerp(color3.rgb, acc / max(total, 0.001), dens), dens);
+}
+
+// Franjas onduladas superpuestas.
+float4 PSWaves(VertData v_in) : TARGET
+{
+	float2 p = float2(v_in.uv.x * aspect, v_in.uv.y) * scale;
+	float t  = time;
+
+	float3 col = color3.rgb;
+	float dens = 0.0;
+
+	for (int i = 0; i < 4; i++) {
+		float fi = float(i);
+		float y  = 0.35 + fi * 0.15 + sin(p.x * (1.0 + fi * 0.4) + t * (0.30 + fi * 0.12) + fi * 1.7) * 0.06 +
+		           sin(p.x * 2.3 - t * 0.20 + fi) * 0.025;
+		float m  = smoothstep(y - 0.004, y + 0.004, v_in.uv.y);
+
+		float3 wave = lerp(color3.rgb, lerp(color1.rgb, color2.rgb, fi / 3.0), 0.35 + fi * 0.2);
+		col  = lerp(col, wave, m);
+		dens = max(dens, m * (0.5 + fi * 0.16));
+	}
+
+	return compose(col, dens);
+}
+
+// Puntos de luz que parpadean y suben despacio.
+float4 PSStars(VertData v_in) : TARGET
+{
+	float2 base = float2(v_in.uv.x * aspect, v_in.uv.y);
+	float t     = time;
+
+	float3 acc  = float3(0.0, 0.0, 0.0);
+	float total = 0.0;
+
+	for (int i = 0; i < 3; i++) {
+		float fi   = float(i);
+		float2 g   = base * scale * (3.0 + fi * 2.0) + float2(0.0, t * 0.04 * (fi + 1.0));
+		float2 id  = floor(g) + float2(fi * 31.0, fi * 13.0);
+		float2 f   = frac(g) - float2(0.5, 0.5);
+		float rnd  = hash21(id);
+		float2 off = float2(hash21(id + float2(3.1, 0.0)) - 0.5, hash21(id + float2(0.0, 7.7)) - 0.5) * 0.6;
+		float d    = length(f - off);
+
+		float star = (1.0 - smoothstep(0.0, 0.08 + rnd * 0.06, d)) * step(0.45, rnd) *
+		             (0.5 + 0.5 * sin(t * (1.0 + rnd * 2.0) + rnd * 6.283));
+		acc   += lerp(color1.rgb, color2.rgb, hash21(id + float2(5.0, 5.0))) * star;
+		total += star;
+	}
+
+	float dens = clamp(total, 0.0, 1.0);
+	return compose(lerp(color3.rgb, acc / max(total, 0.001), dens), dens);
+}
+
 technique Smoke
 {
 	pass
@@ -104,5 +223,50 @@ technique Gradient
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSGradient(v_in);
+	}
+}
+
+technique Aurora
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSAurora(v_in);
+	}
+}
+
+technique Plasma
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlasma(v_in);
+	}
+}
+
+technique Bokeh
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBokeh(v_in);
+	}
+}
+
+technique Waves
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSWaves(v_in);
+	}
+}
+
+technique Stars
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSStars(v_in);
 	}
 }

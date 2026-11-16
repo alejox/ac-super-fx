@@ -18,10 +18,12 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <obs-module.h>
 #include <plugin-support.h>
+#include <math.h>
 
 #define S_PRESET "preset"
 #define S_TYPE "type"
 #define S_RADIUS "radius"
+#define S_ANGLE "angle"
 #define S_AREA "area"
 #define S_REGION "region_group"
 #define S_REGION_X "region_x"
@@ -33,6 +35,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #define TYPE_GAUSSIAN 0
 #define TYPE_BOX 1
+#define TYPE_PIXELATE 2
+#define TYPE_MOTION 3
+#define TYPE_ZOOM 4
 
 #define AREA_FULL 0
 #define AREA_REGION 1
@@ -54,6 +59,7 @@ struct blur_filter {
 	gs_eparam_t *param_image;
 	gs_eparam_t *param_texel_step;
 	gs_eparam_t *param_radius;
+	gs_eparam_t *param_image_size;
 	gs_eparam_t *param_original;
 	gs_eparam_t *param_region;
 	gs_eparam_t *param_feather;
@@ -65,6 +71,7 @@ struct blur_filter {
 
 	int type;
 	float radius;
+	float angle; /* radianes, para el estilo Movimiento */
 
 	bool use_region;
 	float region_x; /* 0..1 */
@@ -89,6 +96,7 @@ static void blur_update(void *data, obs_data_t *settings)
 
 	f->type = (int)obs_data_get_int(settings, S_TYPE);
 	f->radius = (float)obs_data_get_int(settings, S_RADIUS);
+	f->angle = (float)obs_data_get_int(settings, S_ANGLE) * 0.01745329252f;
 
 	f->use_region = obs_data_get_int(settings, S_AREA) == AREA_REGION;
 	f->region_x = (float)obs_data_get_double(settings, S_REGION_X) / 100.0f;
@@ -113,6 +121,7 @@ static void *blur_create(obs_data_t *settings, obs_source_t *context)
 		f->param_image = gs_effect_get_param_by_name(f->effect, "image");
 		f->param_texel_step = gs_effect_get_param_by_name(f->effect, "texel_step");
 		f->param_radius = gs_effect_get_param_by_name(f->effect, "radius");
+		f->param_image_size = gs_effect_get_param_by_name(f->effect, "image_size");
 		f->param_original = gs_effect_get_param_by_name(f->effect, "original");
 		f->param_region = gs_effect_get_param_by_name(f->effect, "region");
 		f->param_feather = gs_effect_get_param_by_name(f->effect, "feather_uv");
@@ -178,13 +187,13 @@ static bool capture_input(struct blur_filter *f, uint32_t width, uint32_t height
 	return ok;
 }
 
-/* Una pasada de blur en una direccion: src -> dst. */
-static bool blur_pass(struct blur_filter *f, gs_texture_t *src, gs_texrender_t *dst, uint32_t width, uint32_t height,
-		      float step_x, float step_y)
+/* Una pasada del efecto: src -> dst. */
+static bool blur_pass(struct blur_filter *f, const char *technique, gs_texture_t *src, gs_texrender_t *dst,
+		      uint32_t width, uint32_t height, float step_x, float step_y)
 {
-	const char *technique = f->type == TYPE_BOX ? "Box" : "Gaussian";
-	struct vec2 step;
+	struct vec2 step, size;
 	vec2_set(&step, step_x, step_y);
+	vec2_set(&size, (float)width, (float)height);
 
 	gs_texrender_reset(dst);
 	if (!gs_texrender_begin(dst, width, height))
@@ -198,6 +207,7 @@ static bool blur_pass(struct blur_filter *f, gs_texture_t *src, gs_texrender_t *
 	gs_effect_set_texture(f->param_image, src);
 	gs_effect_set_vec2(f->param_texel_step, &step);
 	gs_effect_set_float(f->param_radius, f->radius);
+	gs_effect_set_vec2(f->param_image_size, &size);
 
 	while (gs_effect_loop(f->effect, technique))
 		gs_draw_sprite(src, 0, width, height);
@@ -271,9 +281,30 @@ static void blur_render(void *data, gs_effect_t *effect)
 	gs_enable_blending(false);
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
 
-	bool ok =
-		blur_pass(f, gs_texrender_get_texture(f->input), f->pass_h, width, height, 1.0f / (float)width, 0.0f) &&
-		blur_pass(f, gs_texrender_get_texture(f->pass_h), f->pass_v, width, height, 0.0f, 1.0f / (float)height);
+	gs_texture_t *input = gs_texrender_get_texture(f->input);
+	float tx = 1.0f / (float)width;
+	float ty = 1.0f / (float)height;
+	bool ok;
+
+	switch (f->type) {
+	case TYPE_PIXELATE:
+		ok = blur_pass(f, "Pixelate", input, f->pass_v, width, height, 0.0f, 0.0f);
+		break;
+	case TYPE_ZOOM:
+		ok = blur_pass(f, "Zoom", input, f->pass_v, width, height, 0.0f, 0.0f);
+		break;
+	case TYPE_MOTION:
+		/* Una sola pasada gaussiana a lo largo del angulo elegido. */
+		ok = blur_pass(f, "Gaussian", input, f->pass_v, width, height, cosf(f->angle) * tx,
+			       sinf(f->angle) * ty);
+		break;
+	default: {
+		const char *technique = f->type == TYPE_BOX ? "Box" : "Gaussian";
+		ok = blur_pass(f, technique, input, f->pass_h, width, height, tx, 0.0f) &&
+		     blur_pass(f, technique, gs_texrender_get_texture(f->pass_h), f->pass_v, width, height, 0.0f, ty);
+		break;
+	}
+	}
 
 	gs_blend_state_pop();
 
@@ -314,6 +345,16 @@ static bool radius_modified(obs_properties_t *props, obs_property_t *property, o
 		return false;
 
 	obs_data_set_int(settings, S_PRESET, PRESET_CUSTOM);
+	return true;
+}
+
+/* El angulo solo aplica al estilo Movimiento. */
+static bool type_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(property);
+
+	bool motion = obs_data_get_int(settings, S_TYPE) == TYPE_MOTION;
+	obs_property_set_visible(obs_properties_get(props, S_ANGLE), motion);
 	return true;
 }
 
@@ -359,6 +400,14 @@ static obs_properties_t *blur_properties(void *data)
 						       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(type, obs_module_text("ACFX.Blur.Type.Gaussian"), TYPE_GAUSSIAN);
 	obs_property_list_add_int(type, obs_module_text("ACFX.Blur.Type.Box"), TYPE_BOX);
+	obs_property_list_add_int(type, obs_module_text("ACFX.Blur.Type.Pixelate"), TYPE_PIXELATE);
+	obs_property_list_add_int(type, obs_module_text("ACFX.Blur.Type.Motion"), TYPE_MOTION);
+	obs_property_list_add_int(type, obs_module_text("ACFX.Blur.Type.Zoom"), TYPE_ZOOM);
+	obs_property_set_modified_callback(type, type_modified);
+
+	obs_property_t *angle =
+		obs_properties_add_int_slider(props, S_ANGLE, obs_module_text("ACFX.Blur.Angle"), 0, 360, 1);
+	obs_property_int_set_suffix(angle, "\xC2\xB0");
 	obs_property_set_long_description(type, obs_module_text("ACFX.Blur.Type.Tip"));
 
 	obs_property_t *area = obs_properties_add_list(props, S_AREA, obs_module_text("ACFX.Blur.Area"),
@@ -388,6 +437,7 @@ static void blur_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, S_PRESET, PRESET_MEDIUM);
 	obs_data_set_default_int(settings, S_RADIUS, 20);
 	obs_data_set_default_int(settings, S_TYPE, TYPE_GAUSSIAN);
+	obs_data_set_default_int(settings, S_ANGLE, 0);
 	obs_data_set_default_int(settings, S_AREA, AREA_FULL);
 	obs_data_set_default_double(settings, S_REGION_X, 25.0);
 	obs_data_set_default_double(settings, S_REGION_Y, 25.0);

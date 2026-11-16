@@ -35,6 +35,13 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #define STYLE_SMOKE 0
 #define STYLE_GRADIENT 1
+#define STYLE_AURORA 2
+#define STYLE_PLASMA 3
+#define STYLE_BOKEH 4
+#define STYLE_WAVES 5
+#define STYLE_STARS 6
+
+static const char *style_technique[] = {"Smoke", "Gradient", "Aurora", "Plasma", "Bokeh", "Waves", "Stars"};
 
 #define COLORS_FIXED 0
 #define COLORS_SOURCE 1
@@ -435,7 +442,8 @@ static void flow_render(void *data, gs_effect_t *effect)
 	gs_enable_blending(true);
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
 
-	while (gs_effect_loop(s->effect, s->style == STYLE_GRADIENT ? "Gradient" : "Smoke"))
+	int style = s->style >= STYLE_SMOKE && s->style <= STYLE_STARS ? s->style : STYLE_SMOKE;
+	while (gs_effect_loop(s->effect, style_technique[style]))
 		gs_draw_sprite(NULL, 0, s->width, s->height);
 
 	gs_blend_state_pop();
@@ -477,6 +485,11 @@ static obs_properties_t *flow_properties(void *data)
 							OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(style, obs_module_text("ACFX.Flow.Style.Smoke"), STYLE_SMOKE);
 	obs_property_list_add_int(style, obs_module_text("ACFX.Flow.Style.Gradient"), STYLE_GRADIENT);
+	obs_property_list_add_int(style, obs_module_text("ACFX.Flow.Style.Aurora"), STYLE_AURORA);
+	obs_property_list_add_int(style, obs_module_text("ACFX.Flow.Style.Plasma"), STYLE_PLASMA);
+	obs_property_list_add_int(style, obs_module_text("ACFX.Flow.Style.Bokeh"), STYLE_BOKEH);
+	obs_property_list_add_int(style, obs_module_text("ACFX.Flow.Style.Waves"), STYLE_WAVES);
+	obs_property_list_add_int(style, obs_module_text("ACFX.Flow.Style.Stars"), STYLE_STARS);
 
 	obs_property_t *colors = obs_properties_add_list(props, S_COLORS, obs_module_text("ACFX.Flow.Colors"),
 							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);

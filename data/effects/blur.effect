@@ -69,6 +69,30 @@ float4 PSBox(VertData v_in) : TARGET
 	return sum / total;
 }
 
+uniform float2 image_size; // tamano de la fuente en pixeles
+
+// Pixelado: bloques del tamano indicado por radius. Ideal para censurar.
+float4 PSPixelate(VertData v_in) : TARGET
+{
+	float block = max(radius, 1.0);
+	float2 cell = (floor(v_in.uv * image_size / block) + float2(0.5, 0.5)) * block / image_size;
+	return image.Sample(linearClamp, cell);
+}
+
+// Zoom: desenfoque radial hacia el centro de la fuente.
+float4 PSZoom(VertData v_in) : TARGET
+{
+	float2 dir     = v_in.uv - float2(0.5, 0.5);
+	float strength = radius / 96.0 * 0.6;
+
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	for (int i = 0; i < 24; i++) {
+		float k = 1.0 - strength * (float(i) / 23.0);
+		sum += image.Sample(linearClamp, float2(0.5, 0.5) + dir * k);
+	}
+	return sum / 24.0;
+}
+
 // Mezcla el original con el desenfocado solo dentro de una region.
 uniform texture2d original;
 uniform float4 region;     // x = izquierda, y = arriba, z = derecha, w = abajo (UV)
@@ -118,5 +142,23 @@ technique Region
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSRegion(v_in);
+	}
+}
+
+technique Pixelate
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPixelate(v_in);
+	}
+}
+
+technique Zoom
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSZoom(v_in);
 	}
 }
