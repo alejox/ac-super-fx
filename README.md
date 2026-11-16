@@ -33,6 +33,12 @@ cp -R build_macos/RelWithDebInfo/ac-super-fx.plugin ~/Library/Application\ Suppo
 
 Reinicia OBS → clic derecho en una fuente → Filtros → "+" → **AC Super FX Blur**.
 
+## Actualizaciones (macOS)
+
+Unos segundos después de abrir OBS, el plugin consulta la última release de este repositorio en GitHub. Si hay una versión nueva muestra un aviso con tres opciones: actualizar ahora, más tarde u omitir esa versión. Solo si aceptas descarga el `.pkg` de la release y lo instala en tu carpeta de plugins; luego hay que reiniciar OBS.
+
+Para desactivar la consulta: `defaults write com.obsproject.obs-studio ACSuperFXDisableUpdateCheck -bool YES`
+
 ## Publicar una versión
 
 Sube la versión en `buildspec.json` y empuja una rama `release/X.Y.Z`; GitHub Actions compila y publica la release.

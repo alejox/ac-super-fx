@@ -36,4 +36,11 @@ endif()
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c src/blur-filter.c src/flow-source.c src/frame-filter.c)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  enable_language(OBJC)
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/updater-macos.m)
+  set_source_files_properties(src/updater-macos.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "-framework AppKit")
+endif()
+
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

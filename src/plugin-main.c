@@ -26,16 +26,27 @@ extern struct obs_source_info ac_super_fx_blur_filter;
 extern struct obs_source_info ac_super_fx_flow_source;
 extern struct obs_source_info ac_super_fx_frame_filter;
 
+#ifdef __APPLE__
+void ac_super_fx_updater_start(void);
+void ac_super_fx_updater_stop(void);
+#endif
+
 bool obs_module_load(void)
 {
 	obs_register_source(&ac_super_fx_blur_filter);
 	obs_register_source(&ac_super_fx_flow_source);
 	obs_register_source(&ac_super_fx_frame_filter);
+#ifdef __APPLE__
+	ac_super_fx_updater_start();
+#endif
 	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
 	return true;
 }
 
 void obs_module_unload(void)
 {
+#ifdef __APPLE__
+	ac_super_fx_updater_stop();
+#endif
 	obs_log(LOG_INFO, "plugin unloaded");
 }
