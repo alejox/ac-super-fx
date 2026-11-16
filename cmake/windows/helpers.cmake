@@ -23,6 +23,8 @@ function(set_target_properties_plugin target)
   set_target_properties(${target} PROPERTIES VERSION 0 SOVERSION ${PLUGIN_VERSION})
 
   install(TARGETS ${target} RUNTIME DESTINATION "${target}/bin/64bit" LIBRARY DESTINATION "${target}/bin/64bit")
+  # OBS 33+ carga el modulo desde la raiz de la carpeta del plugin; bin/64bit queda para OBS 32 y anteriores.
+  install(TARGETS ${target} RUNTIME DESTINATION "${target}" LIBRARY DESTINATION "${target}")
 
   install(
     FILES "$<TARGET_PDB_FILE:${target}>"

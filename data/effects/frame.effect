@@ -1,0 +1,72 @@
+// AC Super FX - Marco: esquinas redondeadas, borde y sombra en una sola pasada.
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 source_size;   // tamano de la fuente en pixeles
+uniform float2 output_size;   // tamano con el margen de la sombra
+uniform float pad;            // margen en pixeles a cada lado
+uniform float radius;
+uniform float border_width;
+uniform float4 border_color;
+uniform float4 shadow_color;
+uniform float2 shadow_offset;
+uniform float shadow_blur;
+uniform float shadow_opacity;
+
+sampler_state linearClamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+// Distancia con signo a un rectangulo redondeado (negativa dentro).
+float rounded_box(float2 p, float2 half_size, float r)
+{
+	float2 q = abs(p) - half_size + float2(r, r);
+	return min(max(q.x, q.y), 0.0) + length(max(q, float2(0.0, 0.0))) - r;
+}
+
+float4 PSFrame(VertData v_in) : TARGET
+{
+	float2 px        = v_in.uv * output_size - float2(pad, pad);
+	float2 half_size = source_size * 0.5;
+	float2 p         = px - half_size;
+	float r          = min(radius, min(half_size.x, half_size.y));
+
+	float d    = rounded_box(p, half_size, r);
+	float mask = clamp(0.5 - d, 0.0, 1.0);
+
+	float4 fill = image.Sample(linearClamp, px / source_size);
+
+	float border = clamp(d + border_width + 0.5, 0.0, 1.0) * step(0.01, border_width) * border_color.a;
+	fill = fill * (1.0 - border) + float4(border_color.rgb, 1.0) * border;
+	fill = fill * mask;
+
+	float ds     = rounded_box(p - shadow_offset, half_size, r);
+	float soft   = max(shadow_blur, 0.5);
+	float shadow = (1.0 - smoothstep(-soft, soft, ds)) * shadow_opacity;
+
+	float4 under = float4(shadow_color.rgb * shadow, shadow);
+	return fill + under * (1.0 - fill.a);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFrame(v_in);
+	}
+}
